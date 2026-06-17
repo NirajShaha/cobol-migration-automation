@@ -9,7 +9,7 @@ from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from .llm import create_llm_provider, BaseLLMProvider
-from .parser import CobolParser, ParsedCobolProgram
+from .parser import CobolParser, ParsedCobolProgram, ListingExtractor
 from .converter import CodeConverter, ConversionResult
 from .analyzer import AccuracyAnalyzer, AccuracyReport
 from .reporter import MigrationReporter
@@ -35,6 +35,7 @@ class MigrationOrchestrator:
         self.output_dir = output_dir or settings.OUTPUT_DIR
 
         self.parser = CobolParser()
+        self.listing_extractor = ListingExtractor()
         self.converter = CodeConverter(self.llm, max_tokens=settings.MAX_TOKENS)
         self.analyzer = AccuracyAnalyzer(self.llm, max_tokens=settings.MAX_TOKENS)
         self.reporter = MigrationReporter(self.output_dir)
@@ -60,6 +61,20 @@ class MigrationOrchestrator:
         source_code = source_file.read_text(encoding='utf-8', errors='replace')
         console.print(f"\n📂 Source file: [cyan]{source_file.name}[/cyan]")
         console.print(f"📏 Source size: {len(source_code):,} characters")
+        
+        # Step 1b: Detect and extract from compiler listing if needed
+        extraction = self.listing_extractor.extract(source_code)
+        if extraction.is_listing:
+            console.print(f"\n📋 [yellow]Detected IBM COBOL compiler listing format[/yellow]")
+            console.print(f"   Pages found: {extraction.pages_found}")
+            console.print(f"   Source lines extracted: {extraction.total_source_lines:,}")
+            if extraction.program_id:
+                console.print(f"   Program ID: [green]{extraction.program_id}[/green]")
+            if extraction.warnings:
+                for warn in extraction.warnings:
+                    console.print(f"   ⚠ {warn}")
+            source_code = extraction.source_code
+            console.print(f"   Clean source size: {len(source_code):,} characters")
         
         # Step 2: Parse COBOL structure
         console.print("\n🔍 Parsing COBOL/Telon structure...")
