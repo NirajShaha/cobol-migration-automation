@@ -39,12 +39,13 @@ TARGET_ACCURACY = float(os.getenv("TARGET_ACCURACY", "95"))
 MAX_TOKENS = int(os.getenv("MAX_TOKENS", "4096"))
 TEMPERATURE = float(os.getenv("TEMPERATURE", "0.2"))
 
-# Accuracy Weights (must sum to 1.0)
-ACCURACY_WEIGHTS = {
-    "business_logic": 0.25,
-    "error_handling": 0.15,
-    "schema_mapping": 0.20,
-    "field_validation": 0.15,
-    "ui_fields": 0.15,
-    "error_messages": 0.10,
+# Per-Dimension Minimum Thresholds
+# 95% target means EACH dimension must individually score >= 95%
+DIMENSION_THRESHOLDS = {
+    "business_logic": float(os.getenv("MIN_BUSINESS_LOGIC", "95")),
+    "error_handling": float(os.getenv("MIN_ERROR_HANDLING", "95")),
+    "schema_mapping": float(os.getenv("MIN_SCHEMA_MAPPING", "95")),
+    "field_validation": float(os.getenv("MIN_FIELD_VALIDATION", "95")),
+    "ui_fields": float(os.getenv("MIN_UI_FIELDS", "95")),
+    "error_messages": float(os.getenv("MIN_ERROR_MESSAGES", "95")),
 }

@@ -12,28 +12,56 @@ from config.prompts.analysis_prompts import (
     ANALYSIS_SYSTEM_PROMPT,
     ACCURACY_ANALYSIS_PROMPT,
 )
-from config.settings import ACCURACY_WEIGHTS
+from config.settings import DIMENSION_THRESHOLDS
+
+
+# Map internal keys to display names
+DIMENSION_DISPLAY_NAMES = {
+    "business_logic": "Business Logic",
+    "error_handling": "Error Handling",
+    "schema_mapping": "Schema & Table Mapping",
+    "field_validation": "Field Validations",
+    "ui_fields": "UI Fields",
+    "error_messages": "Error Messages",
+}
 
 
 @dataclass
 class DimensionScore:
     """Score for a single accuracy dimension."""
     name: str
+    key: str
     score: float
-    weight: float
+    threshold: float
     matched_items: list[str] = field(default_factory=list)
     missing_items: list[str] = field(default_factory=list)
     incorrect_items: list[str] = field(default_factory=list)
+
+    @property
+    def passed(self) -> bool:
+        """Whether this dimension meets its minimum threshold."""
+        return self.score >= self.threshold
 
 
 @dataclass
 class AccuracyReport:
     """Complete accuracy analysis report."""
     overall_score: float = 0.0
+    min_dimension_score: float = 0.0
     dimensions: list[DimensionScore] = field(default_factory=list)
     summary: str = ""
     iteration: int = 0
     raw_analysis: str = ""
+
+    @property
+    def all_dimensions_passed(self) -> bool:
+        """True only if EVERY dimension meets its individual threshold."""
+        return all(d.passed for d in self.dimensions) if self.dimensions else False
+
+    @property
+    def failing_dimensions(self) -> list[DimensionScore]:
+        """Dimensions that haven't met their threshold yet."""
+        return [d for d in self.dimensions if not d.passed]
 
     @property
     def all_missing_items(self) -> list[str]:
@@ -54,11 +82,17 @@ class AccuracyReport:
         return items
 
     def get_gaps_report(self) -> str:
-        """Format gaps for the refinement prompt."""
+        """Format gaps for the refinement prompt, prioritizing failing dimensions."""
         lines = []
-        for dim in self.dimensions:
+        # Show failing dimensions first (sorted lowest score first)
+        sorted_dims = sorted(self.dimensions, key=lambda d: d.score)
+        for dim in sorted_dims:
             if dim.missing_items or dim.incorrect_items:
-                lines.append(f"\n## {dim.name} (Score: {dim.score}/100)")
+                status = "❌ BELOW THRESHOLD" if not dim.passed else "✓ PASSED"
+                lines.append(
+                    f"\n## {dim.name} (Score: {dim.score}/100, "
+                    f"Required: {dim.threshold}, {status})"
+                )
                 if dim.missing_items:
                     lines.append("Missing:")
                     for item in dim.missing_items:
@@ -125,11 +159,9 @@ class AccuracyAnalyzer:
 
     def _parse_analysis_response(self, response: str, iteration: int) -> AccuracyReport:
         """Parse the LLM's JSON analysis response."""
-        # Extract JSON from response (may be wrapped in markdown code block)
         json_match = re.search(r'```(?:json)?\s*\n?(.*?)\n?```', response, re.DOTALL)
         json_str = json_match.group(1) if json_match else response
         
-        # Try to find raw JSON if no code block
         if not json_match:
             json_start = response.find('{')
             json_end = response.rfind('}')
@@ -139,41 +171,35 @@ class AccuracyAnalyzer:
         try:
             data = json.loads(json_str)
         except json.JSONDecodeError:
-            # If JSON parsing fails, create a default low-score report
             return AccuracyReport(
                 overall_score=0.0,
+                min_dimension_score=0.0,
                 summary="Failed to parse analysis response",
                 iteration=iteration,
                 raw_analysis=response,
             )
         
         dimensions = []
-        dim_map = {
-            "business_logic": "Business Logic",
-            "error_handling": "Error Handling",
-            "schema_mapping": "Schema & Table Mapping",
-            "field_validation": "Field Validations",
-            "ui_fields": "UI Fields",
-            "error_messages": "Error Messages",
-        }
-        
-        for key, display_name in dim_map.items():
+        for key, display_name in DIMENSION_DISPLAY_NAMES.items():
             dim_data = data.get("dimensions", {}).get(key, {})
-            weight = ACCURACY_WEIGHTS.get(key, 0.0)
+            threshold = DIMENSION_THRESHOLDS.get(key, 95.0)
             dimensions.append(DimensionScore(
                 name=display_name,
+                key=key,
                 score=float(dim_data.get("score", 0)),
-                weight=weight,
+                threshold=threshold,
                 matched_items=dim_data.get("matched_items", []),
                 missing_items=dim_data.get("missing_items", []),
                 incorrect_items=dim_data.get("incorrect_items", []),
             ))
         
-        # Calculate weighted overall score
-        overall = sum(d.score * d.weight for d in dimensions)
+        scores = [d.score for d in dimensions]
+        overall = sum(scores) / len(scores) if scores else 0
+        min_score = min(scores) if scores else 0
         
         return AccuracyReport(
             overall_score=round(overall, 2),
+            min_dimension_score=round(min_score, 2),
             dimensions=dimensions,
             summary=data.get("summary", ""),
             iteration=iteration,
@@ -194,7 +220,6 @@ class AccuracyAnalyzer:
         para_matched = []
         para_missing = []
         for para in parsed_program.paragraphs:
-            # Convert COBOL paragraph name to likely Java method name
             method_name = self._cobol_to_java_name(para.name)
             if method_name.lower() in all_code_lower or para.name.lower().replace('-', '') in all_code_lower:
                 para_matched.append(para.name)
@@ -204,8 +229,9 @@ class AccuracyAnalyzer:
         para_score = (len(para_matched) / max(len(parsed_program.paragraphs), 1)) * 100
         dimensions.append(DimensionScore(
             name="Business Logic",
+            key="business_logic",
             score=para_score,
-            weight=ACCURACY_WEIGHTS["business_logic"],
+            threshold=DIMENSION_THRESHOLDS["business_logic"],
             matched_items=para_matched,
             missing_items=para_missing,
         ))
@@ -222,8 +248,9 @@ class AccuracyAnalyzer:
         msg_score = (len(msg_matched) / max(len(parsed_program.error_messages), 1)) * 100
         dimensions.append(DimensionScore(
             name="Error Messages",
+            key="error_messages",
             score=msg_score,
-            weight=ACCURACY_WEIGHTS["error_messages"],
+            threshold=DIMENSION_THRESHOLDS["error_messages"],
             matched_items=msg_matched,
             missing_items=msg_missing,
         ))
@@ -252,8 +279,9 @@ class AccuracyAnalyzer:
         db_score = (len(db_matched) / max(len(tables_checked), 1)) * 100
         dimensions.append(DimensionScore(
             name="Schema & Table Mapping",
+            key="schema_mapping",
             score=db_score,
-            weight=ACCURACY_WEIGHTS["schema_mapping"],
+            threshold=DIMENSION_THRESHOLDS["schema_mapping"],
             matched_items=db_matched,
             missing_items=db_missing,
         ))
@@ -276,8 +304,9 @@ class AccuracyAnalyzer:
         val_score = (len(val_matched) / max(len(parsed_program.validations), 1)) * 100
         dimensions.append(DimensionScore(
             name="Field Validations",
+            key="field_validation",
             score=val_score,
-            weight=ACCURACY_WEIGHTS["field_validation"],
+            threshold=DIMENSION_THRESHOLDS["field_validation"],
             matched_items=val_matched,
             missing_items=val_missing,
         ))
@@ -301,26 +330,31 @@ class AccuracyAnalyzer:
         ui_score = (len(ui_matched) / max(len(parsed_program.screen_fields), 1)) * 100
         dimensions.append(DimensionScore(
             name="UI Fields",
+            key="ui_fields",
             score=ui_score,
-            weight=ACCURACY_WEIGHTS["ui_fields"],
+            threshold=DIMENSION_THRESHOLDS["ui_fields"],
             matched_items=ui_matched,
             missing_items=ui_missing,
         ))
         
         # Error handling (structural check for try/catch patterns)
         error_patterns = ['try', 'catch', 'throw', 'exception', 'error']
-        error_score = 50.0  # Default - hard to check structurally
+        error_score = 50.0
         if any(p in all_code_lower for p in error_patterns):
             error_score = 70.0
         dimensions.append(DimensionScore(
             name="Error Handling",
+            key="error_handling",
             score=error_score,
-            weight=ACCURACY_WEIGHTS["error_handling"],
+            threshold=DIMENSION_THRESHOLDS["error_handling"],
         ))
         
-        overall = sum(d.score * d.weight for d in dimensions)
+        scores = [d.score for d in dimensions]
+        overall = sum(scores) / len(scores) if scores else 0
+        min_score = min(scores) if scores else 0
         return AccuracyReport(
             overall_score=round(overall, 2),
+            min_dimension_score=round(min_score, 2),
             dimensions=dimensions,
             summary="Structural analysis based on pattern matching",
         )
@@ -335,19 +369,18 @@ class AccuracyAnalyzer:
             return llm_report
         
         merged_dimensions = []
-        struct_dims = {d.name: d for d in structural_report.dimensions}
+        struct_dims = {d.key: d for d in structural_report.dimensions}
         
         for llm_dim in llm_report.dimensions:
-            struct_dim = struct_dims.get(llm_dim.name)
+            struct_dim = struct_dims.get(llm_dim.key)
             if struct_dim:
-                # Take the lower (more conservative) score
                 score = min(llm_dim.score, struct_dim.score)
-                # Combine missing items from both analyses
                 all_missing = list(set(llm_dim.missing_items + struct_dim.missing_items))
                 merged_dimensions.append(DimensionScore(
                     name=llm_dim.name,
+                    key=llm_dim.key,
                     score=score,
-                    weight=llm_dim.weight,
+                    threshold=llm_dim.threshold,
                     matched_items=llm_dim.matched_items,
                     missing_items=all_missing,
                     incorrect_items=llm_dim.incorrect_items,
@@ -355,9 +388,12 @@ class AccuracyAnalyzer:
             else:
                 merged_dimensions.append(llm_dim)
         
-        overall = sum(d.score * d.weight for d in merged_dimensions)
+        scores = [d.score for d in merged_dimensions]
+        overall = sum(scores) / len(scores) if scores else 0
+        min_score = min(scores) if scores else 0
         return AccuracyReport(
             overall_score=round(overall, 2),
+            min_dimension_score=round(min_score, 2),
             dimensions=merged_dimensions,
             summary=llm_report.summary,
             iteration=llm_report.iteration,

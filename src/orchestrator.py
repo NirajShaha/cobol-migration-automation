@@ -77,7 +77,7 @@ class MigrationOrchestrator:
         # Step 3: Initial conversion
         console.print(f"\n{'━'*60}")
         console.print("[bold]Starting iterative conversion...[/bold]")
-        console.print(f"   Target accuracy: {self.target_accuracy}%")
+        console.print(f"   Target: ALL dimensions must individually score >= {self.target_accuracy}%")
         console.print(f"   Max iterations: {self.max_iterations}")
         console.print(f"{'━'*60}\n")
         
@@ -99,19 +99,31 @@ class MigrationOrchestrator:
             )
             console.print(iter_report)
             
-            # Check if target accuracy reached
-            if accuracy_report.overall_score >= self.target_accuracy:
+            # Check if ALL dimensions meet their individual thresholds
+            if accuracy_report.all_dimensions_passed:
                 console.print(
-                    f"\n✅ [bold green]Target accuracy reached: "
-                    f"{accuracy_report.overall_score:.1f}% >= {self.target_accuracy}%[/bold green]"
+                    f"\n✅ [bold green]All dimensions passed! "
+                    f"Every dimension >= {self.target_accuracy}% "
+                    f"(lowest: {accuracy_report.min_dimension_score:.1f}%)[/bold green]"
                 )
                 break
+            
+            # Show which dimensions are still failing
+            failing = accuracy_report.failing_dimensions
+            console.print(
+                f"\n   ⚠ {len(failing)} dimension(s) below threshold:"
+            )
+            for dim in sorted(failing, key=lambda d: d.score):
+                console.print(
+                    f"     ❌ {dim.name}: {dim.score:.1f}% "
+                    f"(need {dim.threshold}%)"
+                )
             
             # Check if this is the last iteration
             if iteration >= self.max_iterations:
                 console.print(
                     f"\n⚠️  [bold yellow]Max iterations ({self.max_iterations}) reached. "
-                    f"Current accuracy: {accuracy_report.overall_score:.1f}%[/bold yellow]"
+                    f"{len(failing)} dimension(s) still below threshold.[/bold yellow]"
                 )
                 break
             

@@ -27,18 +27,23 @@ class MigrationReporter:
             f"{'='*60}",
             f"  ITERATION {iteration} REPORT",
             f"{'='*60}",
-            f"  Overall Accuracy: {accuracy_report.overall_score:.1f}%",
+            f"  Average Score: {accuracy_report.overall_score:.1f}%",
+            f"  Lowest Dimension: {accuracy_report.min_dimension_score:.1f}%",
+            f"  Dimensions Passed: {sum(1 for d in accuracy_report.dimensions if d.passed)}/{len(accuracy_report.dimensions)}",
             f"  Files Generated: {len(conversion_result.files)}",
             f"  Tokens Used: {conversion_result.tokens_used}",
             f"{'='*60}",
             "",
-            "  DIMENSION SCORES:",
-            f"  {'-'*40}",
+            "  DIMENSION SCORES (each must be >= threshold):",
+            f"  {'-'*50}",
         ]
 
         for dim in accuracy_report.dimensions:
             bar = self._progress_bar(dim.score)
-            report_lines.append(f"  {dim.name:<25} {bar} {dim.score:.1f}%")
+            status = "✓" if dim.passed else "✗"
+            report_lines.append(
+                f"  {status} {dim.name:<25} {bar} {dim.score:.1f}% (min: {dim.threshold:.0f}%)"
+            )
 
         if accuracy_report.all_missing_items:
             report_lines.append(f"\n  MISSING ITEMS ({len(accuracy_report.all_missing_items)}):")
@@ -68,39 +73,55 @@ class MigrationReporter:
         elapsed_time: float,
     ) -> str:
         """Generate the final migration summary report."""
-        final_score = iterations[-1][1].overall_score if iterations else 0
+        final_report_data = iterations[-1][1] if iterations else None
+        all_passed = final_report_data.all_dimensions_passed if final_report_data else False
         
         report_lines = [
             f"\n{'='*60}",
-            f"  MIGRATION COMPLETE - FINAL REPORT",
+            f"  MIGRATION {'COMPLETE' if all_passed else 'FINISHED'} - FINAL REPORT",
             f"{'='*60}",
             f"  Program: {program_id}",
-            f"  Final Accuracy: {final_score:.1f}%",
+            f"  Status: {'✅ ALL DIMENSIONS PASSED' if all_passed else '⚠️  SOME DIMENSIONS BELOW THRESHOLD'}",
+            f"  Average Score: {final_report_data.overall_score:.1f}%" if final_report_data else "",
+            f"  Lowest Dimension: {final_report_data.min_dimension_score:.1f}%" if final_report_data else "",
             f"  Total Iterations: {len(iterations)}",
             f"  Total Tokens Used: {total_tokens:,}",
             f"  Elapsed Time: {elapsed_time:.1f}s",
             f"  Files Generated: {len(final_result.files)}",
             f"{'='*60}",
             "",
-            "  ACCURACY PROGRESSION:",
+            "  ACCURACY PROGRESSION (lowest dimension per iteration):",
         ]
 
         for iteration, report in iterations:
-            bar = self._progress_bar(report.overall_score)
-            report_lines.append(f"    Iteration {iteration}: {bar} {report.overall_score:.1f}%")
+            bar = self._progress_bar(report.min_dimension_score)
+            passed = sum(1 for d in report.dimensions if d.passed)
+            total = len(report.dimensions)
+            report_lines.append(
+                f"    Iteration {iteration}: {bar} min={report.min_dimension_score:.1f}% "
+                f"({passed}/{total} passed)"
+            )
 
         report_lines.append(f"\n  GENERATED FILES:")
         for f in final_result.files:
             report_lines.append(f"    📄 {f.file_path}")
 
-        if iterations:
-            final_report = iterations[-1][1]
+        if final_report_data:
             report_lines.append(f"\n  FINAL DIMENSION SCORES:")
-            for dim in final_report.dimensions:
-                status = "✓" if dim.score >= 95 else "△" if dim.score >= 80 else "✗"
-                report_lines.append(f"    {status} {dim.name:<25} {dim.score:.1f}%")
+            for dim in final_report_data.dimensions:
+                status = "✓" if dim.passed else "✗"
+                report_lines.append(
+                    f"    {status} {dim.name:<25} {dim.score:.1f}% "
+                    f"(threshold: {dim.threshold:.0f}%)"
+                )
 
-            remaining_gaps = final_report.all_missing_items
+            failing = final_report_data.failing_dimensions
+            if failing:
+                report_lines.append(f"\n  ⚠ DIMENSIONS STILL BELOW THRESHOLD ({len(failing)}):")
+                for dim in sorted(failing, key=lambda d: d.score):
+                    report_lines.append(f"    ❌ {dim.name}: {dim.score:.1f}% (need {dim.threshold:.0f}%)")
+
+            remaining_gaps = final_report_data.all_missing_items
             if remaining_gaps:
                 report_lines.append(f"\n  REMAINING GAPS ({len(remaining_gaps)}):")
                 for item in remaining_gaps[:10]:
