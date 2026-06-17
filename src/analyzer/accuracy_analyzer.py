@@ -210,13 +210,14 @@ class AccuracyAnalyzer:
         parsed_program: ParsedCobolProgram,
         conversion_result: ConversionResult,
     ) -> AccuracyReport:
-        """Perform structural analysis by checking for known elements in generated code."""
+        """Perform structural analysis checking elements AND modular architecture."""
         all_code = '\n'.join(f.content for f in conversion_result.files)
         all_code_lower = all_code.lower()
+        file_paths = [f.file_path.lower() for f in conversion_result.files]
         
         dimensions = []
         
-        # Check paragraphs -> methods
+        # === Business Logic: paragraphs → service methods + modularity ===
         para_matched = []
         para_missing = []
         for para in parsed_program.paragraphs:
@@ -226,7 +227,23 @@ class AccuracyAnalyzer:
             else:
                 para_missing.append(f"Paragraph '{para.name}' has no equivalent method")
         
-        para_score = (len(para_matched) / max(len(parsed_program.paragraphs), 1)) * 100
+        # Check modular backend layers exist
+        backend_layers = {
+            'service': any('service' in p for p in file_paths),
+            'serviceimpl': any('serviceimpl' in p or 'service/impl' in p for p in file_paths),
+            'controller': any('controller' in p for p in file_paths),
+            'repository': any('repository' in p for p in file_paths),
+            'mapper': any('mapper' in p for p in file_paths),
+        }
+        for layer, exists in backend_layers.items():
+            if not exists:
+                para_missing.append(f"Missing backend layer: {layer}")
+        
+        layer_count = sum(1 for v in backend_layers.values() if v)
+        para_element_score = (len(para_matched) / max(len(parsed_program.paragraphs), 1)) * 100
+        layer_score = (layer_count / len(backend_layers)) * 100
+        para_score = min(para_element_score, layer_score)
+        
         dimensions.append(DimensionScore(
             name="Business Logic",
             key="business_logic",
@@ -236,7 +253,7 @@ class AccuracyAnalyzer:
             missing_items=para_missing,
         ))
         
-        # Check error messages
+        # === Error Messages ===
         msg_matched = []
         msg_missing = []
         for msg in parsed_program.error_messages:
@@ -255,7 +272,7 @@ class AccuracyAnalyzer:
             missing_items=msg_missing,
         ))
         
-        # Check DB operations/tables
+        # === Schema & Table Mapping + modular DTO/entity separation ===
         db_matched = []
         db_missing = []
         tables_checked = set()
@@ -276,7 +293,21 @@ class AccuracyAnalyzer:
             else:
                 db_missing.append(f"Table/File '{table}' not found in generated code")
         
-        db_score = (len(db_matched) / max(len(tables_checked), 1)) * 100
+        # Check modular data layers
+        data_layers = {
+            'entity': any('entity' in p for p in file_paths),
+            'dto/request': any('request' in p and 'dto' in p for p in file_paths),
+            'dto/response': any('response' in p and ('dto' in p or 'apiresponse' in p) for p in file_paths),
+            'repository': any('repository' in p for p in file_paths),
+        }
+        for layer, exists in data_layers.items():
+            if not exists:
+                db_missing.append(f"Missing data layer: {layer}")
+        
+        data_layer_score = (sum(1 for v in data_layers.values() if v) / len(data_layers)) * 100
+        db_element_score = (len(db_matched) / max(len(tables_checked), 1)) * 100
+        db_score = min(db_element_score, data_layer_score)
+        
         dimensions.append(DimensionScore(
             name="Schema & Table Mapping",
             key="schema_mapping",
@@ -286,7 +317,7 @@ class AccuracyAnalyzer:
             missing_items=db_missing,
         ))
         
-        # Check validations
+        # === Field Validations (backend + frontend) ===
         val_matched = []
         val_missing = []
         for val in parsed_program.validations:
@@ -301,6 +332,17 @@ class AccuracyAnalyzer:
             else:
                 val_missing.append(f"Validation '{val.validation_type}' on field '{val.field_name}'")
         
+        # Check for validation infrastructure
+        has_zod = 'zod' in all_code_lower or '.schema.ts' in ' '.join(file_paths)
+        has_jakarta = '@notblank' in all_code_lower or '@notNull' in all_code_lower or '@size' in all_code_lower or '@valid' in all_code_lower
+        has_validator = any('validator' in p for p in file_paths)
+        if not has_zod:
+            val_missing.append("Missing frontend Zod validation schema")
+        if not has_jakarta:
+            val_missing.append("Missing Jakarta Bean Validation annotations on DTOs")
+        if not has_validator:
+            val_missing.append("Missing custom Validator class for complex rules")
+        
         val_score = (len(val_matched) / max(len(parsed_program.validations), 1)) * 100
         dimensions.append(DimensionScore(
             name="Field Validations",
@@ -311,7 +353,7 @@ class AccuracyAnalyzer:
             missing_items=val_missing,
         ))
         
-        # Check screen fields
+        # === UI Fields + modular frontend ===
         ui_matched = []
         ui_missing = []
         for sf in parsed_program.screen_fields:
@@ -327,6 +369,19 @@ class AccuracyAnalyzer:
             else:
                 ui_missing.append(f"Screen field '{sf.name}' not found in UI code")
         
+        # Check modular frontend layers
+        frontend_layers = {
+            'page component': any('page.tsx' in p for p in file_paths),
+            'feature component': any('components/features' in p or 'components/feature' in p for p in file_paths),
+            'api service': any('service' in p and ('.ts' in p or '.tsx' in p) for p in file_paths),
+            'types': any('types' in p and '.ts' in p for p in file_paths),
+            'hooks': any('hook' in p or 'use' in p.split('/')[-1] for p in file_paths),
+            'validation schema': any('validation' in p or 'schema' in p for p in file_paths),
+        }
+        for layer, exists in frontend_layers.items():
+            if not exists:
+                ui_missing.append(f"Missing frontend layer: {layer}")
+        
         ui_score = (len(ui_matched) / max(len(parsed_program.screen_fields), 1)) * 100
         dimensions.append(DimensionScore(
             name="UI Fields",
@@ -337,16 +392,31 @@ class AccuracyAnalyzer:
             missing_items=ui_missing,
         ))
         
-        # Error handling (structural check for try/catch patterns)
-        error_patterns = ['try', 'catch', 'throw', 'exception', 'error']
-        error_score = 50.0
-        if any(p in all_code_lower for p in error_patterns):
-            error_score = 70.0
+        # === Error Handling - check for modular exception architecture ===
+        error_matched = []
+        error_missing = []
+        
+        exception_layers = {
+            'custom exception classes': any('exception' in p and '.java' in p for p in file_paths),
+            'GlobalExceptionHandler': 'controlleradvice' in all_code_lower or 'exceptionhandler' in all_code_lower,
+            'ErrorResponse DTO': 'errorresponse' in all_code_lower,
+            'try/catch blocks': 'try' in all_code_lower and 'catch' in all_code_lower,
+            'throw statements': 'throw' in all_code_lower,
+        }
+        for layer, exists in exception_layers.items():
+            if exists:
+                error_matched.append(layer)
+            else:
+                error_missing.append(f"Missing: {layer}")
+        
+        error_score = (len(error_matched) / len(exception_layers)) * 100
         dimensions.append(DimensionScore(
             name="Error Handling",
             key="error_handling",
             score=error_score,
             threshold=DIMENSION_THRESHOLDS["error_handling"],
+            matched_items=error_matched,
+            missing_items=error_missing,
         ))
         
         scores = [d.score for d in dimensions]
