@@ -5,7 +5,6 @@ import re
 from dataclasses import dataclass, field
 from typing import Optional
 
-from ..llm.base import BaseLLMProvider
 from ..converter.code_converter import ConversionResult
 from ..parser.cobol_parser import ParsedCobolProgram, CobolParser
 from config.prompts.analysis_prompts import (
@@ -107,7 +106,7 @@ class AccuracyReport:
 class AccuracyAnalyzer:
     """Analyzes accuracy of migrated code using LLM-based comparison."""
 
-    def __init__(self, llm_provider: BaseLLMProvider, max_tokens: int = 4096):
+    def __init__(self, llm_provider, max_tokens: int = 4096):
         self.llm = llm_provider
         self.max_tokens = max_tokens
         self.parser = CobolParser()
@@ -119,13 +118,27 @@ class AccuracyAnalyzer:
         parsed_program: ParsedCobolProgram,
         iteration: int = 1,
     ) -> AccuracyReport:
-        """Analyze accuracy of migrated code against original source."""
+        """Analyze accuracy of migrated code against original source.
+        
+        For large files, uses structural analysis as the primary signal
+        and only sends a truncated source to the LLM to save tokens.
+        """
         # Format migrated code for analysis
         migrated_code = self._format_migrated_code(conversion_result)
         
+        # Token-efficient: truncate source for LLM analysis on large files
+        source_for_llm = source_code
+        estimated_tokens = self.llm.estimate_tokens(source_code + migrated_code)
+        if estimated_tokens > 15000:
+            # Send only key sections to LLM, not full source
+            max_source = 20000  # chars
+            source_for_llm = source_code[:max_source]
+            if len(source_code) > max_source:
+                source_for_llm += f"\n... [truncated, full source is {len(source_code):,} chars]"
+        
         # Call LLM for detailed analysis
         prompt = ACCURACY_ANALYSIS_PROMPT.format(
-            source_code=source_code,
+            source_code=source_for_llm,
             migrated_code=migrated_code,
         )
         
@@ -133,13 +146,13 @@ class AccuracyAnalyzer:
             system_prompt=ANALYSIS_SYSTEM_PROMPT,
             user_prompt=prompt,
             max_tokens=self.max_tokens,
-            temperature=0.1,  # Low temperature for consistent analysis
+            temperature=0.1,
         )
         
         # Parse the JSON analysis response
         report = self._parse_analysis_response(response.content, iteration)
         
-        # Cross-validate with structural analysis
+        # Cross-validate with structural analysis (no LLM cost, always accurate)
         structural_report = self._structural_analysis(
             parsed_program, conversion_result
         )

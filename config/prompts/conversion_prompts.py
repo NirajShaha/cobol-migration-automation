@@ -181,6 +181,203 @@ Generate EVERY file listed below (adapt names to match the program being convert
 ### FILE: src/lib/constants/index.ts
 """
 
+# === CHUNKED CONVERSION PROMPTS (for large programs) ===
+
+CHUNKED_SYSTEM_PROMPT = """You are an expert mainframe modernization architect specializing in converting 
+COBOL/Telon applications to modern Spring Boot (Java) backend and Next.js (TypeScript/React) frontend.
+
+You are converting ONE LAYER at a time from a large COBOL/Telon program. Focus ONLY on the layer 
+requested. Produce production-ready, well-structured code for that specific layer.
+
+CRITICAL: Output ONLY the files for the requested layer. Use the exact format:
+### FILE: path/to/file.ext
+```language
+<code>
+```
+"""
+
+CHUNKED_ENTITY_PROMPT = """Convert the following COBOL/Telon data structures into JPA Entity classes.
+
+## COBOL/Telon Source (Data Division & COPYBOOK structures):
+```
+{source_summary}
+```
+
+## Parsed Data Fields:
+{data_fields}
+
+## DB Operations found:
+{db_operations}
+
+## Instructions:
+Generate JPA Entity classes for EVERY table/file referenced in the source:
+- Map PIC X(n) → String, PIC 9(n) → Long/Integer, PIC 9(n)V99 → BigDecimal
+- Include @Entity, @Table, @Id, @Column annotations with proper column names/lengths
+- Add @CreatedDate, @LastModifiedDate where applicable
+- One entity per COPYBOOK/record structure or DB table
+
+## Output Format:
+### FILE: src/main/java/com/app/entity/[EntityName].java
+```java
+<code>
+```
+"""
+
+CHUNKED_REPOSITORY_PROMPT = """Generate Spring Data JPA Repository interfaces for these entities.
+
+## Entities already generated:
+{entities_code}
+
+## DB Operations from COBOL source:
+{db_operations}
+
+## Instructions:
+- One repository per entity
+- Map COBOL READ with key → findById or custom findBy methods
+- Map COBOL READ with conditions → custom @Query methods
+- Map WRITE → save, REWRITE → save, DELETE → deleteById
+- Include all custom query methods needed by the COBOL operations
+
+## Output Format:
+### FILE: src/main/java/com/app/repository/[EntityName]Repository.java
+```java
+<code>
+```
+"""
+
+CHUNKED_DTO_PROMPT = """Generate DTOs (Request/Response) for the application.
+
+## Entities:
+{entities_code}
+
+## Validations from COBOL source:
+{validations}
+
+## Screen Fields (for request DTOs):
+{screen_fields}
+
+## Instructions:
+- Separate Request DTOs (incoming) and Response DTOs (outgoing)
+- Include Jakarta Bean Validation annotations (@NotBlank, @Size, @Pattern, @NotNull)
+  matching EVERY validation from the COBOL source
+- Add ApiResponse<T> wrapper DTO
+- Add ErrorResponse DTO
+
+## Output Format:
+### FILE: src/main/java/com/app/dto/request/[Name]Request.java
+```java
+<code>
+```
+### FILE: src/main/java/com/app/dto/response/[Name]Response.java
+```java
+<code>
+```
+"""
+
+CHUNKED_SERVICE_PROMPT = """Generate the Service layer (interface + implementation) with ALL business logic.
+
+## COBOL Source Paragraphs (business logic):
+```
+{paragraphs_source}
+```
+
+## Entities & Repositories available:
+{entities_code}
+{repositories_code}
+
+## Error Messages to preserve:
+{error_messages}
+
+## Instructions:
+- Interface + Implementation pattern (e.g., Service + ServiceImpl)
+- EACH COBOL paragraph/section → one Java method
+- Preserve ALL EVALUATE/IF conditions as equivalent Java logic
+- Preserve ALL PERFORM loops as Java iterations
+- Service calls repository (never accesses DB directly)
+- Throws custom exceptions for error conditions
+- Preserve ALL error messages exactly
+
+## Output Format:
+### FILE: src/main/java/com/app/service/[Name]Service.java
+```java
+<code>
+```
+### FILE: src/main/java/com/app/service/impl/[Name]ServiceImpl.java
+```java
+<code>
+```
+"""
+
+CHUNKED_CONTROLLER_PROMPT = """Generate REST Controllers, Exception handlers, Validators, Config, and Utility classes.
+
+## Service interfaces available:
+{services_code}
+
+## DTOs available:
+{dtos_code}
+
+## Error Messages:
+{error_messages}
+
+## Instructions:
+Generate these files:
+1. REST Controller(s) - delegates to service, uses @Valid on DTOs
+2. GlobalExceptionHandler (@RestControllerAdvice) 
+3. Custom Exception classes (ResourceNotFoundException, DuplicateRecordException, ValidationException)
+4. Custom Validator classes for complex business rules
+5. Mapper class (Entity ↔ DTO)
+6. CorsConfig
+7. AppConstants (hardcoded values, status codes)
+8. application.yml
+
+## Output Format:
+### FILE: src/main/java/com/app/controller/[Name]Controller.java
+```java
+<code>
+```
+"""
+
+CHUNKED_FRONTEND_PROMPT = """Generate the complete Next.js frontend (App Router + shadcn/ui).
+
+## Screen Fields from COBOL/Telon:
+{screen_fields}
+
+## Validations:
+{validations}
+
+## Error Messages:
+{error_messages}
+
+## Backend DTOs (for type alignment):
+{dtos_code}
+
+## Backend API endpoints (from controller):
+{controllers_code}
+
+## Instructions:
+Generate ALL frontend layers:
+1. Types/Interfaces (matching backend DTOs)
+2. API Service Layer (axios/fetch wrapper + typed functions)
+3. Zod Validation Schemas (matching ALL COBOL field validations)
+4. Custom Hooks (useForm + data fetching)
+5. Feature Components (using shadcn/ui exclusively)
+6. Page Components (App Router pages)
+7. Constants (labels, routes, messages)
+
+Import shadcn components from "@/components/ui/[component]".
+Map ALL screen fields to form components.
+
+## Output Format:
+### FILE: src/types/[entity].types.ts
+```typescript
+<code>
+```
+"""
+
+# Threshold (in estimated tokens) above which we switch to chunked mode
+LARGE_SOURCE_THRESHOLD = 12000  # ~48K chars ≈ ~12K tokens for source alone
+
+
 REFINEMENT_PROMPT = """The previous conversion attempt scored {accuracy_score}% accuracy.
 Below are the specific gaps identified:
 

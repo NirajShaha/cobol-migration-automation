@@ -17,8 +17,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from src.orchestrator import MigrationOrchestrator
-from src.llm import create_llm_provider
-from config import settings
+from src.llm_providers import create_provider
+from src.core import setup_logging, MigrationError, LLMProviderError
+from config.settings import settings
 
 
 def main():
@@ -41,25 +42,25 @@ Examples:
         "--provider",
         choices=["nvidia", "openai", "azure", "anthropic"],
         default=None,
-        help=f"LLM provider to use (default: from .env = {settings.LLM_PROVIDER})",
+        help=f"LLM provider to use (default: from .env = {settings.llm.provider})",
     )
     parser.add_argument(
         "--max-iterations",
         type=int,
         default=None,
-        help=f"Maximum refinement iterations (default: {settings.MAX_ITERATIONS})",
+        help=f"Maximum refinement iterations (default: {settings.pipeline.max_iterations})",
     )
     parser.add_argument(
         "--target-accuracy",
         type=float,
         default=None,
-        help=f"Target accuracy percentage (default: {settings.TARGET_ACCURACY})",
+        help=f"Target accuracy percentage (default: {settings.pipeline.target_accuracy})",
     )
     parser.add_argument(
         "--output",
         type=Path,
         default=None,
-        help=f"Output directory (default: {settings.OUTPUT_DIR})",
+        help=f"Output directory (default: {settings.output_dir})",
     )
     parser.add_argument(
         "--api-key",
@@ -77,53 +78,41 @@ Examples:
         "--max-tokens",
         type=int,
         default=None,
-        help=f"Max tokens per LLM call (default: {settings.MAX_TOKENS})",
+        help=f"Max tokens per LLM call (default: {settings.llm.max_tokens})",
+    )
+    parser.add_argument(
+        "--log-level",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        default=None,
+        help="Logging level (default: INFO)",
     )
 
     args = parser.parse_args()
+
+    # Setup logging
+    setup_logging(args.log_level)
 
     # Validate input file
     if not args.input_file.exists():
         print(f"Error: Input file not found: {args.input_file}")
         sys.exit(1)
 
-    # Determine provider and config
-    provider_type = args.provider or settings.LLM_PROVIDER
-    
-    # Build provider kwargs
-    provider_kwargs = {}
-    if provider_type == "nvidia":
-        provider_kwargs["api_key"] = args.api_key or settings.NVIDIA_NIM_API_KEY
-        provider_kwargs["model"] = args.model or settings.NVIDIA_NIM_MODEL
-        provider_kwargs["base_url"] = settings.NVIDIA_NIM_BASE_URL
-    elif provider_type == "openai":
-        provider_kwargs["api_key"] = args.api_key or settings.OPENAI_API_KEY
-        provider_kwargs["model"] = args.model or settings.OPENAI_MODEL
-    elif provider_type == "azure":
-        provider_kwargs["api_key"] = args.api_key or settings.AZURE_OPENAI_API_KEY
-        provider_kwargs["endpoint"] = settings.AZURE_OPENAI_ENDPOINT
-        provider_kwargs["deployment"] = settings.AZURE_OPENAI_DEPLOYMENT
-        provider_kwargs["api_version"] = settings.AZURE_OPENAI_API_VERSION
-    elif provider_type == "anthropic":
-        provider_kwargs["api_key"] = args.api_key or settings.ANTHROPIC_API_KEY
-        provider_kwargs["model"] = args.model or settings.ANTHROPIC_MODEL
-
-    # Validate API key
-    if not provider_kwargs.get("api_key"):
-        print(f"Error: No API key configured for provider '{provider_type}'.")
-        print(f"Set it in .env file or pass via --api-key argument.")
-        print(f"See .env.example for configuration details.")
-        sys.exit(1)
-
-    # Override max tokens if specified
+    # Override settings if provided
     if args.max_tokens:
-        settings.MAX_TOKENS = args.max_tokens
+        settings.llm.max_tokens = args.max_tokens
 
     # Create provider
+    provider_type = args.provider or settings.llm.provider
     try:
-        llm_provider = create_llm_provider(provider_type, **provider_kwargs)
-    except Exception as e:
-        print(f"Error creating LLM provider: {e}")
+        llm_provider = create_provider(
+            provider_type=provider_type,
+            api_key=args.api_key,
+            model=args.model,
+        )
+    except LLMProviderError as e:
+        print(f"Error: {e}")
+        print("Set API key in .env file or pass via --api-key argument.")
+        print("See .env.example for configuration details.")
         sys.exit(1)
 
     # Run migration
@@ -140,8 +129,11 @@ Examples:
     except KeyboardInterrupt:
         print("\n\n⚠️  Migration interrupted by user.")
         sys.exit(130)
-    except Exception as e:
+    except MigrationError as e:
         print(f"\n❌ Migration failed: {e}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"\n❌ Unexpected error: {e}")
         raise
 
 
