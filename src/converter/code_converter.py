@@ -4,11 +4,12 @@ import re
 from dataclasses import dataclass, field
 from typing import Optional, Any, Protocol, runtime_checkable
 
-from ..parser.cobol_parser import ParsedCobolProgram
+from ..parser.cobol_parser import ParsedCobolProgram, CobolParser
 from config.prompts.conversion_prompts import (
     SYSTEM_PROMPT,
     INITIAL_CONVERSION_PROMPT,
     REFINEMENT_PROMPT,
+    BUSINESS_LOGIC_REFINEMENT_PROMPT,
     CHUNKED_SYSTEM_PROMPT,
     CHUNKED_ENTITY_PROMPT,
     CHUNKED_REPOSITORY_PROMPT,
@@ -18,6 +19,7 @@ from config.prompts.conversion_prompts import (
     CHUNKED_FRONTEND_PROMPT,
     LARGE_SOURCE_THRESHOLD,
 )
+from config.settings import settings
 
 
 @runtime_checkable
@@ -303,7 +305,7 @@ class CodeConverter:
         """
         parts = []
         total_chars = 0
-        max_chars = 30000  # Cap total paragraph text
+        max_chars = settings.pipeline.max_context_chars
         
         for para in parsed_program.paragraphs:
             entry = f"{para.name}.\n{para.body}\n"
@@ -329,6 +331,34 @@ class CodeConverter:
         For large files, uses a focused refinement targeting only the gaps.
         """
         generated_code = self._format_generated_code(previous_result.files)
+
+        business_paragraphs = self._extract_missing_paragraph_names(missing_items)
+        if business_paragraphs:
+            target_paragraphs = self._extract_target_paragraphs(
+                source_code, business_paragraphs
+            )
+            if target_paragraphs:
+                business_prompt = BUSINESS_LOGIC_REFINEMENT_PROMPT.format(
+                    missing_paragraphs='\n'.join(f"- {p}" for p in business_paragraphs),
+                    target_paragraphs=target_paragraphs,
+                    source_code=source_code[: settings.pipeline.max_context_chars],
+                    generated_code=generated_code,
+                )
+                business_response = self.llm.generate(
+                    system_prompt=SYSTEM_PROMPT,
+                    user_prompt=business_prompt,
+                    max_tokens=self.max_tokens,
+                    temperature=0.2,
+                )
+                business_files = self._parse_generated_files(business_response.content)
+                if business_files:
+                    merged_files = self._merge_file_sets(previous_result.files, business_files)
+                    return ConversionResult(
+                        files=merged_files,
+                        raw_response=business_response.content,
+                        iteration=iteration,
+                        tokens_used=business_response.input_tokens + business_response.output_tokens,
+                    )
         
         # For large source, truncate source_code in refinement prompt
         # to avoid exceeding context window
@@ -336,7 +366,7 @@ class CodeConverter:
         estimated_tokens = self.llm.estimate_tokens(source_code)
         if estimated_tokens > LARGE_SOURCE_THRESHOLD:
             # Include just enough source for context
-            max_source_chars = 20000
+            max_source_chars = settings.pipeline.max_context_chars
             source_for_prompt = source_code[:max_source_chars]
             if len(source_code) > max_source_chars:
                 source_for_prompt += (
@@ -374,6 +404,46 @@ class CodeConverter:
             iteration=iteration,
             tokens_used=response.input_tokens + response.output_tokens,
         )
+
+    def _extract_missing_paragraph_names(self, missing_items: str) -> list[str]:
+        """Extract missing COBOL paragraph names from analyzer gap text."""
+        names = re.findall(r"Paragraph '([^']+)'", missing_items)
+        unique_names: list[str] = []
+        seen: set[str] = set()
+        for name in names:
+            norm = name.strip().lower()
+            if norm and norm not in seen:
+                seen.add(norm)
+                unique_names.append(name.strip())
+        return unique_names
+
+    def _extract_target_paragraphs(
+        self,
+        source_code: str,
+        paragraph_names: list[str],
+    ) -> str:
+        """Extract specific paragraph bodies from source for targeted refinement."""
+        if not paragraph_names:
+            return ""
+
+        parser = CobolParser()
+        parsed = parser.parse(source_code)
+
+        target_lookup = {name.lower() for name in paragraph_names}
+        matched_entries: list[str] = []
+        total_chars = 0
+        max_chars = settings.pipeline.max_context_chars
+
+        for para in parsed.paragraphs:
+            para_name = para.name.strip().lower()
+            if para_name in target_lookup:
+                entry = f"{para.name}.\n{para.body}\n"
+                if total_chars + len(entry) > max_chars:
+                    break
+                matched_entries.append(entry)
+                total_chars += len(entry)
+
+        return '\n'.join(matched_entries)
 
     def _merge_file_sets(
         self, previous: list[GeneratedFile], new: list[GeneratedFile]

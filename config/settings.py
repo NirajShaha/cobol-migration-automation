@@ -60,7 +60,7 @@ class PipelineSettings(BaseSettings):
     
     # Token budget
     large_source_threshold: int = Field(default=12000, alias="LARGE_SOURCE_THRESHOLD")
-    max_context_chars: int = Field(default=30000, alias="MAX_CONTEXT_CHARS")
+    max_context_chars: int = Field(default=90000, alias="MAX_CONTEXT_CHARS")
     
     # Per-Dimension Minimum Thresholds
     min_business_logic: float = Field(default=95.0, alias="MIN_BUSINESS_LOGIC")

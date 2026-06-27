@@ -245,7 +245,14 @@ def analyze_accuracy(state: dict, llm: LLMProvider) -> dict:
     )
     
     try:
-        report = analyzer.analyze(source_code, conversion_result, parsed_program, iteration)
+        previous_report = state.get("iteration_history", [])[-1][1] if state.get("iteration_history") else None
+        report = analyzer.analyze(
+            source_code=source_code,
+            conversion_result=conversion_result,
+            parsed_program=parsed_program,
+            iteration=iteration,
+            previous_report=previous_report,
+        )
     except Exception as e:
         logger.error("analysis_failed", error=str(e), iteration=iteration)
         # On analysis failure, create a minimal report so pipeline can continue

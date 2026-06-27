@@ -117,6 +117,7 @@ class AccuracyAnalyzer:
         conversion_result: ConversionResult,
         parsed_program: ParsedCobolProgram,
         iteration: int = 1,
+        previous_report: Optional[AccuracyReport] = None,
     ) -> AccuracyReport:
         """Analyze accuracy of migrated code against original source.
         
@@ -146,7 +147,7 @@ class AccuracyAnalyzer:
             system_prompt=ANALYSIS_SYSTEM_PROMPT,
             user_prompt=prompt,
             max_tokens=self.max_tokens,
-            temperature=0.1,
+            temperature=0.0,
         )
         
         # Parse the JSON analysis response
@@ -159,6 +160,7 @@ class AccuracyAnalyzer:
         
         # Merge LLM analysis with structural validation
         final_report = self._merge_reports(report, structural_report)
+        final_report = self._stabilize_report(final_report, previous_report)
         final_report.raw_analysis = response.content
         
         return final_report
@@ -445,7 +447,7 @@ class AccuracyAnalyzer:
     def _merge_reports(
         self, llm_report: AccuracyReport, structural_report: AccuracyReport
     ) -> AccuracyReport:
-        """Merge LLM and structural reports, taking the lower score for each dimension."""
+        """Merge LLM and structural reports with structural-weighted stability."""
         if not llm_report.dimensions:
             return structural_report
         if not structural_report.dimensions:
@@ -457,16 +459,26 @@ class AccuracyAnalyzer:
         for llm_dim in llm_report.dimensions:
             struct_dim = struct_dims.get(llm_dim.key)
             if struct_dim:
-                score = min(llm_dim.score, struct_dim.score)
+                llm_weight = 0.3
+                structural_weight = 0.7
+                if llm_dim.key == "business_logic":
+                    llm_weight = 0.2
+                    structural_weight = 0.8
+                score = round(
+                    (llm_dim.score * llm_weight) + (struct_dim.score * structural_weight),
+                    2,
+                )
                 all_missing = list(set(llm_dim.missing_items + struct_dim.missing_items))
+                all_incorrect = list(set(llm_dim.incorrect_items + struct_dim.incorrect_items))
+                all_matched = list(set(llm_dim.matched_items + struct_dim.matched_items))
                 merged_dimensions.append(DimensionScore(
                     name=llm_dim.name,
                     key=llm_dim.key,
                     score=score,
                     threshold=llm_dim.threshold,
-                    matched_items=llm_dim.matched_items,
+                    matched_items=all_matched,
                     missing_items=all_missing,
-                    incorrect_items=llm_dim.incorrect_items,
+                    incorrect_items=all_incorrect,
                 ))
             else:
                 merged_dimensions.append(llm_dim)
@@ -481,6 +493,31 @@ class AccuracyAnalyzer:
             summary=llm_report.summary,
             iteration=llm_report.iteration,
         )
+
+    def _stabilize_report(
+        self,
+        current_report: AccuracyReport,
+        previous_report: Optional[AccuracyReport],
+    ) -> AccuracyReport:
+        """Limit large score regressions between consecutive iterations."""
+        if not previous_report or not previous_report.dimensions:
+            return current_report
+
+        previous_scores = {d.key: d.score for d in previous_report.dimensions}
+        max_allowed_drop = 2.0
+
+        for dim in current_report.dimensions:
+            previous_score = previous_scores.get(dim.key)
+            if previous_score is None:
+                continue
+            floor_score = previous_score - max_allowed_drop
+            if dim.score < floor_score:
+                dim.score = round(max(floor_score, 0.0), 2)
+
+        scores = [d.score for d in current_report.dimensions]
+        current_report.overall_score = round(sum(scores) / len(scores), 2) if scores else 0.0
+        current_report.min_dimension_score = round(min(scores), 2) if scores else 0.0
+        return current_report
 
     def _cobol_to_java_name(self, cobol_name: str) -> str:
         """Convert COBOL-STYLE-NAME to javaStyleName."""

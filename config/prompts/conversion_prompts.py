@@ -427,3 +427,36 @@ until ALL dimensions pass this threshold. Focus on the lowest-scoring dimensions
 
 Return the COMPLETE corrected code (not just the fixes) in the same file-path format.
 """
+
+BUSINESS_LOGIC_REFINEMENT_PROMPT = """The previous migration is missing business logic paragraph coverage.
+
+## Priority: Business Logic Gap Closure
+Missing COBOL paragraphs:
+{missing_paragraphs}
+
+## Target COBOL Paragraph Bodies:
+{target_paragraphs}
+
+## Original COBOL/Telon Source (reference):
+```
+{source_code}
+```
+
+## Previously Generated Code:
+{generated_code}
+
+## Instructions:
+1. Focus ONLY on service-layer business logic completion.
+2. Add equivalent Java service methods for each missing COBOL paragraph.
+3. Preserve method naming continuity with existing generated files.
+4. Do NOT remove existing methods/classes that are already correct.
+5. Keep business logic in service/impl classes (not controller).
+6. Preserve control flow semantics: PERFORM, IF/EVALUATE, and paragraph transitions.
+
+## Output Format:
+Return complete updated service files using:
+### FILE: path/to/file.ext
+```java
+<code>
+```
+"""

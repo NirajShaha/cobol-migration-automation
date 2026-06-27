@@ -91,13 +91,15 @@ class MigrationOrchestrator:
         console.print(f"{'━' * 60}\n")
         
         current_result = self._perform_initial_conversion(source_code, parsed_program, is_large)
+        self._persist_snapshot(current_result, parsed_program, stage="initial", iteration=1)
         
         # Step 4: Iterative refinement loop
         for iteration in range(1, self.max_iterations + 1):
             console.print(f"\n📊 [bold]Iteration {iteration}[/bold] - Analyzing accuracy...")
             
+            previous_report = self.iteration_history[-1][1] if self.iteration_history else None
             accuracy_report = self._perform_analysis(
-                source_code, current_result, parsed_program, iteration
+                source_code, current_result, parsed_program, iteration, previous_report
             )
             self.iteration_history.append((iteration, accuracy_report))
             
@@ -135,6 +137,12 @@ class MigrationOrchestrator:
             console.print(f"\n🔧 Refining conversion (gaps identified)...")
             current_result = self._perform_refinement(
                 source_code, current_result, accuracy_report, iteration + 1
+            )
+            self._persist_snapshot(
+                current_result,
+                parsed_program,
+                stage="refined",
+                iteration=iteration + 1,
             )
         
         # Step 5: Save output
@@ -234,12 +242,19 @@ class MigrationOrchestrator:
         conversion_result: ConversionResult,
         parsed_program: ParsedCobolProgram,
         iteration: int,
+        previous_report: Optional[AccuracyReport] = None,
     ) -> AccuracyReport:
         """Perform accuracy analysis with error handling."""
         analyzer = AccuracyAnalyzer(self.llm, max_tokens=settings.llm.max_tokens)
         
         try:
-            return analyzer.analyze(source_code, conversion_result, parsed_program, iteration)
+            return analyzer.analyze(
+                source_code=source_code,
+                conversion_result=conversion_result,
+                parsed_program=parsed_program,
+                iteration=iteration,
+                previous_report=previous_report,
+            )
         except Exception as e:
             logger.error("analysis_error", error=str(e), iteration=iteration)
             # Return empty report on failure — pipeline continues
@@ -289,3 +304,14 @@ class MigrationOrchestrator:
         
         return result
 
+    def _persist_snapshot(
+        self,
+        conversion_result: ConversionResult,
+        parsed_program: ParsedCobolProgram,
+        stage: str,
+        iteration: int,
+    ) -> None:
+        """Persist intermediate outputs so container runs always write host-visible artifacts."""
+        program_id = parsed_program.program_id or "UNKNOWN_PROGRAM"
+        snapshot_id = f"{program_id}_{stage}_iter_{iteration}"
+        self.reporter.save_generated_files(conversion_result, snapshot_id)
