@@ -90,6 +90,71 @@ python run.py input/MY_PROGRAM.cbl --output ./my_output
 | `--model` | from .env | Model name override |
 | `--max-tokens` | 4096 | Max tokens per LLM call |
 
+## Run with Docker (Recommended for EC2)
+
+### 1) Build image
+```bash
+docker build -t cobol-migration-automation:latest .
+```
+
+### 2) Run with mounted input/output folders
+```bash
+docker run --rm \
+  --env-file .env \
+  -v "$(pwd)/input:/app/input" \
+  -v "$(pwd)/output:/app/output" \
+  cobol-migration-automation:latest input/YOUR_PROGRAM.txt
+```
+
+> Use `.txt`, `.cbl`, or listing files as input. The pipeline auto-detects compiler listing format.
+
+## Run with Docker Compose
+
+### 1) Build
+```bash
+docker compose build
+```
+
+### 2) Execute migration
+```bash
+docker compose run --rm migrator input/YOUR_PROGRAM.txt
+```
+
+### 3) Output
+Generated files are written to local `./output` (mounted to `/app/output` in container).
+
+## EC2 Quick Start
+
+1. Launch Ubuntu EC2, install Docker + Docker Compose.
+2. Clone this repo on EC2.
+3. Create `.env` with your provider/API settings.
+4. Copy input files into `input/`.
+5. Run:
+   ```bash
+   docker compose build
+   docker compose run --rm migrator input/YOUR_PROGRAM.txt
+   ```
+
+## CI/CD (GitHub Actions)
+
+Workflow file: `.github/workflows/ci-cd.yml`
+
+### CI on PR / Push
+- Install dependencies
+- Compile check (`python -m compileall`)
+- CLI smoke test (`python run.py --help`)
+- Docker image build test
+
+### CD on push to `main`
+- Builds and pushes image to GHCR:
+  - `ghcr.io/<org-or-user>/cobol-migration-automation:latest`
+  - `ghcr.io/<org-or-user>/cobol-migration-automation:<git-sha>`
+- Optional EC2 deploy runs automatically if these GitHub secrets are set:
+  - `EC2_HOST`
+  - `EC2_USER`
+  - `EC2_SSH_KEY`
+  - `EC2_APP_PATH` (path on EC2 where `docker-compose.yml` exists)
+
 ## Output Structure
 
 ```

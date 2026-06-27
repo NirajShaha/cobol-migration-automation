@@ -1,0 +1,13 @@
+services:
+  migrator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: cobol-migration-automation:latest
+    env_file:
+      - .env
+    volumes:
+      - ./input:/app/input
+      - ./output:/app/output
+    command: ["--help"]
+    restart: "no"
