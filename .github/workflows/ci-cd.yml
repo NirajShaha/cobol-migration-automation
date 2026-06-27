@@ -78,12 +78,28 @@ jobs:
 
   deploy-ec2:
     name: Deploy to EC2
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && secrets.EC2_HOST != '' && secrets.EC2_USER != '' && secrets.EC2_SSH_KEY != '' && secrets.EC2_APP_PATH != ''
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
     needs: publish-image
     runs-on: ubuntu-latest
+    env:
+      EC2_HOST: ${{ secrets.EC2_HOST }}
+      EC2_USER: ${{ secrets.EC2_USER }}
+      EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+      EC2_APP_PATH: ${{ secrets.EC2_APP_PATH }}
 
     steps:
+      - name: Check EC2 deploy secrets
+        id: check-secrets
+        run: |
+          if [ -n "${EC2_HOST}" ] && [ -n "${EC2_USER}" ] && [ -n "${EC2_SSH_KEY}" ] && [ -n "${EC2_APP_PATH}" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "EC2 deploy skipped: required secrets are not configured."
+          fi
+
       - name: Deploy over SSH
+        if: steps.check-secrets.outputs.ready == 'true'
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.EC2_HOST }}
