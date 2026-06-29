@@ -110,9 +110,9 @@ docker run --rm \
 
 ## Run with Docker Compose
 
-### 1) Build
+### 1) Pull latest GHCR image
 ```bash
-docker compose build
+docker compose pull migrator
 ```
 
 ### 2) Execute migration
@@ -131,9 +131,11 @@ Generated files are written to local `./output` (mounted to `/app/output` in con
 4. Copy input files into `input/`.
 5. Run:
    ```bash
-   docker compose build
+   docker compose pull migrator
    docker compose run --rm migrator input/YOUR_PROGRAM.txt
    ```
+
+> Compose is configured for GHCR pull mode (`pull_policy: always`), so EC2 always uses the latest published image tag (default `latest`).
 
 ## CI/CD (GitHub Actions)
 
@@ -250,6 +252,41 @@ ACCURACY_WEIGHTS = {
     "error_messages": 0.10,
 }
 ```
+
+## 🔧 Troubleshooting
+
+### NVIDIA API Timeout Error
+If you see: `HTTPSConnectionPool(...Read timed out. (read timeout=300.0))`
+
+**Quick Fix** (2 minutes):
+1. Edit `.env`:
+   ```env
+   REQUEST_TIMEOUT=600
+   ```
+2. Restart Docker:
+   ```bash
+   docker-compose down && docker-compose up --build
+   ```
+
+**Why**: The NVIDIA API sometimes takes longer than 5 minutes to respond.
+
+**For detailed troubleshooting**, see [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) or run the diagnostic:
+```bash
+python test_nvidia_api.py
+```
+
+### Other Common Issues
+
+| Issue | Solution |
+|-------|----------|
+| `Connection refused` | Check EC2 security groups allow outbound HTTPS (443) |
+| `401 Unauthorized` | Verify API key in `.env` is valid |
+| `429 Too Many Requests` | API rate limit exceeded; wait 5-10 min or contact provider |
+| `SSL: CERTIFICATE_VERIFY_FAILED` | Run: `pip install --upgrade certifi` |
+| Docker image pull fails | Check Docker Hub/GHCR credentials; try `docker pull` manually |
+| Out of memory | Increase EC2 instance size or reduce `MAX_TOKENS` in `.env` |
+
+For complete troubleshooting: **See [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md)**
 
 ## Sample Output
 

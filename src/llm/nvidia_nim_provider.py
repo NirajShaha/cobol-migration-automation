@@ -5,6 +5,7 @@ with a custom base_url pointing to NVIDIA's inference API.
 """
 
 from openai import OpenAI
+from config.settings import settings
 from .base import BaseLLMProvider, LLMResponse
 
 
@@ -31,13 +32,20 @@ class NvidiaNimProvider(BaseLLMProvider):
         api_key: str,
         model: str = "meta/llama-3.1-405b-instruct",
         base_url: str = NVIDIA_NIM_BASE_URL,
+        timeout: float = None,
     ):
+        # Use configured timeout from settings, or explicit value, or default to 600s
+        timeout_seconds = timeout or settings.pipeline.request_timeout or 600
+        
         self.client = OpenAI(
             api_key=api_key,
             base_url=base_url,
+            timeout=timeout_seconds,
         )
+        
         self.model = model
         self.base_url = base_url
+        self.timeout = timeout_seconds
 
     def generate(
         self,

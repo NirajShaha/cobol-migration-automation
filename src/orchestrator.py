@@ -5,6 +5,7 @@ the actual pipeline logic to the LangGraph state machine.
 """
 
 import time
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -46,6 +47,8 @@ class MigrationOrchestrator:
         self.reporter = MigrationReporter(self.output_dir)
         self.total_tokens = 0
         self.iteration_history: list[tuple[int, AccuracyReport]] = []
+        self.best_scores: dict[str, float] = {}
+        self.business_logic_graph: dict[str, str] = {}
 
     def migrate(self, source_file: Path) -> ConversionResult:
         """Execute the full migration pipeline.
@@ -101,6 +104,8 @@ class MigrationOrchestrator:
             accuracy_report = self._perform_analysis(
                 source_code, current_result, parsed_program, iteration, previous_report
             )
+            self._update_business_logic_graph(accuracy_report)
+            self._apply_monotonic_scores(accuracy_report)
             self.iteration_history.append((iteration, accuracy_report))
             
             # Print report
@@ -274,6 +279,7 @@ class MigrationOrchestrator:
     ) -> ConversionResult:
         """Perform refinement with progress indicator."""
         converter = CodeConverter(self.llm, max_tokens=settings.llm.max_tokens)
+        memory_context = self._build_memory_context()
         
         gaps_report = accuracy_report.get_gaps_report()
         missing_items = "\n".join(
@@ -296,6 +302,7 @@ class MigrationOrchestrator:
                 accuracy_report=gaps_report,
                 missing_items=missing_items,
                 iteration=iteration,
+                memory_context=memory_context,
             )
             progress.update(task, completed=True)
         
@@ -315,3 +322,52 @@ class MigrationOrchestrator:
         program_id = parsed_program.program_id or "UNKNOWN_PROGRAM"
         snapshot_id = f"{program_id}_{stage}_iter_{iteration}"
         self.reporter.save_generated_files(conversion_result, snapshot_id)
+
+    def _apply_monotonic_scores(self, accuracy_report: AccuracyReport) -> None:
+        """Ensure dimension scores never decrease across iterations."""
+        for dim in accuracy_report.dimensions:
+            previous_best = self.best_scores.get(dim.key)
+            if previous_best is not None and dim.score < previous_best:
+                dim.score = previous_best
+            self.best_scores[dim.key] = dim.score
+
+        scores = [d.score for d in accuracy_report.dimensions]
+        accuracy_report.overall_score = round(sum(scores) / len(scores), 2) if scores else 0.0
+        accuracy_report.min_dimension_score = round(min(scores), 2) if scores else 0.0
+
+    def _update_business_logic_graph(self, accuracy_report: AccuracyReport) -> None:
+        """Maintain persistent paragraph status memory for business-logic refinement."""
+        business_dim = next((d for d in accuracy_report.dimensions if d.key == "business_logic"), None)
+        if not business_dim:
+            return
+
+        for item in business_dim.matched_items:
+            name = item.strip()
+            if name:
+                self.business_logic_graph[name] = "matched"
+
+        for item in business_dim.missing_items:
+            paragraph_match = re.search(r"Paragraph '([^']+)'", item)
+            if paragraph_match:
+                self.business_logic_graph[paragraph_match.group(1)] = "missing"
+
+    def _build_memory_context(self) -> str:
+        """Create persistent memory context for refinement prompts."""
+        if not self.business_logic_graph:
+            return "No persistent business-logic graph yet."
+
+        missing = sorted([k for k, v in self.business_logic_graph.items() if v == "missing"])
+        matched = sorted([k for k, v in self.business_logic_graph.items() if v == "matched"])
+
+        lines = [
+            "Persistent Memory Graph:",
+            f"- Matched paragraphs: {len(matched)}",
+            f"- Missing paragraphs: {len(missing)}",
+        ]
+
+        if missing:
+            lines.append("- Highest-priority unresolved paragraphs:")
+            for name in missing[:50]:
+                lines.append(f"  - {name}")
+
+        return "\n".join(lines)

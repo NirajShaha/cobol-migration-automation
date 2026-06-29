@@ -107,5 +107,6 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
             cd ${{ secrets.EC2_APP_PATH }}
-            docker compose pull
+            export IMAGE_TAG=latest
+            docker compose pull migrator
             docker compose up -d --remove-orphans

@@ -1,9 +1,7 @@
 services:
   migrator:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: cobol-migration-automation:latest
+    image: ghcr.io/nirajshaha/cobol-migration-automation:${IMAGE_TAG:-latest}
+    pull_policy: always
     env_file:
       - .env
     volumes:

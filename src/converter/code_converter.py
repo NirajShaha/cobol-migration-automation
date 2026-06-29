@@ -325,6 +325,7 @@ class CodeConverter:
         accuracy_report: str,
         missing_items: str,
         iteration: int,
+        memory_context: str = "",
     ) -> ConversionResult:
         """Refine a previous conversion based on accuracy analysis.
         
@@ -342,7 +343,7 @@ class CodeConverter:
                     missing_paragraphs='\n'.join(f"- {p}" for p in business_paragraphs),
                     target_paragraphs=target_paragraphs,
                     source_code=source_code[: settings.pipeline.max_context_chars],
-                    generated_code=generated_code,
+                    generated_code=generated_code + "\n\n" + memory_context,
                 )
                 business_response = self.llm.generate(
                     system_prompt=SYSTEM_PROMPT,
@@ -382,6 +383,8 @@ class CodeConverter:
             source_code=source_for_prompt,
             generated_code=generated_code,
         )
+        if memory_context:
+            prompt += f"\n\n## Persistent Memory Context\n{memory_context}\n"
         
         response = self.llm.generate(
             system_prompt=SYSTEM_PROMPT,
